@@ -1,8 +1,8 @@
-# Notes — Capture. Organize. Create.
+# Notes
 
-A polished personal notes desktop app built with **Python, Tkinter, and SQLite**.
-Dark-navy UI inspired by modern notes apps. No third-party packages needed —
-everything runs on the Python standard library.
+A simple personal notes desktop app built with **Python, Tkinter, and SQLite**.
+Dark-navy UI. No third-party packages — everything runs on the Python
+standard library.
 
 ## Run it
 
@@ -11,37 +11,35 @@ python main.py
 ```
 
 That's it. The database (`notes_app/data/notes.db`) is created automatically
-on first launch, pre-filled with sample folders, tags, and notes so the app
+on first launch, pre-filled with sample folders and notes so the app
 feels alive right away.
 
-## Features
+## How it works
 
-- Home dashboard with greeting, stat tiles, and recent notes
-- Full note CRUD with a rich editor (autosave, word/character count)
-- Folders (create, rename, delete)
-- Tags (comma-separated in the editor, browsable per tag)
-- Search across titles, content, and tags
-- Pin, favorite, and archive notes (with restore)
-- Keyboard shortcuts: `Ctrl+N` new note, `Ctrl+S` save, `Ctrl+F` search, `Delete`
-- Settings: display name, autosave delay, database backup
-- Confirmation dialogs for destructive actions
-- Empty states everywhere
+- **Sidebar** — Home, All Notes, Pinned, Favorites, Archive, Folders, Settings
+- **Notes are lists** — click a note on the left, it opens on the right
+- **Editor** — big title up top, body below, folder picker, pin/favorite/archive
+  buttons, autosave, word count
+- **Folders** — create, rename, delete; notes become unfiled when a folder is deleted
+- **Search** — the top bar searches titles and content
+- **Shortcuts** — `Ctrl+N` new note, `Ctrl+F` search
 
 ## Project structure
 
 ```
+main.py               # entry point: python main.py
 notes_app/
-├── main.py            # window, sidebar, top bar, screen switching
-├── theme.py           # dark-navy palette, fonts, icon symbols
-├── database.py        # SQLite: plain functions, parameterized queries
-├── widgets.py         # reusable cards, buttons, dialogs, skeletons
-├── home_view.py       # dashboard
-├── notes_views.py     # all / pinned / favorites / archive lists
-├── editor_view.py     # note editor with autosave
-├── organize_views.py  # folders, tags, search
-└── settings_view.py   # preferences and data options
+├── main.py           # window, sidebar, search bar, screen switching
+├── views.py          # all screens: home, master-detail lists, editor,
+                      #   folders, search, settings
+├── database.py       # SQLite: plain functions, parameterized queries
+├── theme.py          # dark-navy palette and fonts
+├── widgets.py        # small reusable pieces (buttons, dialogs, lists)
+└── data/notes.db     # created automatically on first run
 ```
 
-## Requirements
+## Notes for class
 
-- Python 3.8+ (uses only the standard library: `tkinter`, `sqlite3`)
+Read `database.py` first (how notes are stored), then `views.py`
+(how the master-detail layout works). Every function is small and
+commented with why it exists.

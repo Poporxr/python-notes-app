@@ -1,11 +1,13 @@
 """SQLite storage for the notes app.
 
-Plain functions, parameterized queries, no ORM. The tables are:
-  folders    - named groups a note can belong to
-  notes      - the notes themselves (pin/favorite/archive are flags)
-  tags       - labels like "python"
-  note_tags  - links notes to tags (many-to-many)
-  settings   - simple key/value app preferences
+Plain functions, parameterized queries, no ORM. Two tables:
+  folders  - named groups a note can belong to
+  notes    - the notes themselves (pin/favorite/archive are flags)
+  settings - simple key/value app preferences
+
+If this database was created by an older version of the app, the
+leftover tags tables are dropped on startup (they only ever held
+sample data).
 """
 
 import os
@@ -19,12 +21,11 @@ def get_connection():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row  # rows behave like dicts
-    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
 def init_db():
-    """Create tables if they don't exist yet. Safe to call every launch."""
+    """Create tables if missing, drop the retired tags tables."""
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
@@ -46,21 +47,13 @@ def init_db():
                updated TEXT DEFAULT (datetime('now')))"""
     )
     cur.execute(
-        """CREATE TABLE IF NOT EXISTS tags (
-               id INTEGER PRIMARY KEY AUTOINCREMENT,
-               name TEXT UNIQUE NOT NULL)"""
-    )
-    cur.execute(
-        """CREATE TABLE IF NOT EXISTS note_tags (
-               note_id INTEGER REFERENCES notes(id) ON DELETE CASCADE,
-               tag_id INTEGER REFERENCES tags(id) ON DELETE CASCADE,
-               PRIMARY KEY (note_id, tag_id))"""
-    )
-    cur.execute(
         """CREATE TABLE IF NOT EXISTS settings (
                key TEXT PRIMARY KEY,
                value TEXT)"""
     )
+    # Tags were removed from the app; clean up after old installs.
+    cur.execute("DROP TABLE IF EXISTS note_tags")
+    cur.execute("DROP TABLE IF EXISTS tags")
     conn.commit()
     conn.close()
 
@@ -113,7 +106,7 @@ def update_note(note_id, title=None, body=None, folder_id=None):
 
 
 def delete_note(note_id):
-    """Permanently delete a note (its tag links go with it)."""
+    """Permanently delete a note."""
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("DELETE FROM notes WHERE id = ?", (note_id,))
@@ -133,26 +126,23 @@ def set_flag(note_id, field, value):
     conn.close()
 
 
-def list_notes(mode="all", folder_id=None, tag_id=None, include_archived=False):
-    """Notes for the list screens. Pinned notes come first, then newest."""
+def list_notes(mode="all", folder_id=None):
+    """Notes for the list screens. Pinned first, then newest."""
     conn = get_connection()
     cur = conn.cursor()
     query = "SELECT * FROM notes WHERE 1=1"
     params = []
-    if not include_archived:
+    if mode == "archive":
+        query += " AND archived = 1"
+    else:
         query += " AND archived = 0"
-    if mode == "pinned":
-        query += " AND pinned = 1"
-    elif mode == "favorites":
-        query += " AND favorite = 1"
-    elif mode == "archive":
-        query = query.replace("AND archived = 0", "") + " AND archived = 1"
+        if mode == "pinned":
+            query += " AND pinned = 1"
+        elif mode == "favorites":
+            query += " AND favorite = 1"
     if folder_id is not None:
         query += " AND folder_id = ?"
         params.append(folder_id)
-    if tag_id is not None:
-        query += " AND id IN (SELECT note_id FROM note_tags WHERE tag_id = ?)"
-        params.append(tag_id)
     query += " ORDER BY pinned DESC, updated DESC"
     cur.execute(query, params)
     rows = [dict(r) for r in cur.fetchall()]
@@ -161,18 +151,15 @@ def list_notes(mode="all", folder_id=None, tag_id=None, include_archived=False):
 
 
 def search_notes(text):
-    """Find notes by title, body, or tag name."""
+    """Find notes by title or body."""
     conn = get_connection()
     cur = conn.cursor()
     like = f"%{text}%"
     cur.execute(
-        """SELECT DISTINCT n.* FROM notes n
-           LEFT JOIN note_tags nt ON nt.note_id = n.id
-           LEFT JOIN tags t ON t.id = nt.tag_id
-           WHERE n.archived = 0
-             AND (n.title LIKE ? OR n.body LIKE ? OR t.name LIKE ?)
-           ORDER BY n.pinned DESC, n.updated DESC""",
-        (like, like, like),
+        """SELECT * FROM notes
+           WHERE archived = 0 AND (title LIKE ? OR body LIKE ?)
+           ORDER BY pinned DESC, updated DESC""",
+        (like, like),
     )
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
@@ -241,82 +228,6 @@ def delete_folder(folder_id):
     conn.close()
 
 
-# ----------------------------------------------------------------- tags ---
-
-def get_or_create_tag(name):
-    """Return the tag id, creating the tag if needed. Names are lowercase."""
-    name = name.strip().lower().lstrip("#")
-    if not name:
-        return None
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (name,))
-    cur.execute("SELECT id FROM tags WHERE name = ?", (name,))
-    tag_id = cur.fetchone()[0]
-    conn.commit()
-    conn.close()
-    return tag_id
-
-
-def list_tags():
-    """Tags with a live count of notes using each."""
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """SELECT t.*, (SELECT COUNT(*) FROM note_tags nt
-                         JOIN notes n ON n.id = nt.note_id
-                         WHERE nt.tag_id = t.id AND n.archived = 0) AS note_count
-           FROM tags t ORDER BY t.name"""
-    )
-    rows = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return rows
-
-
-def get_tag(tag_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM tags WHERE id = ?", (tag_id,))
-    row = cur.fetchone()
-    conn.close()
-    return dict(row) if row else None
-
-
-def get_note_tags(note_id):
-    """Tag names attached to a note."""
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """SELECT t.name FROM tags t
-           JOIN note_tags nt ON nt.tag_id = t.id
-           WHERE nt.note_id = ? ORDER BY t.name""",
-        (note_id,),
-    )
-    names = [r[0] for r in cur.fetchall()]
-    conn.close()
-    return names
-
-
-def set_note_tags(note_id, tag_names):
-    """Replace a note's tags with the given list of names."""
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM note_tags WHERE note_id = ?", (note_id,))
-    for raw in tag_names:
-        name = raw.strip().lower().lstrip("#")
-        if not name:
-            continue
-        cur.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (name,))
-        cur.execute("SELECT id FROM tags WHERE name = ?", (name,))
-        tag_id = cur.fetchone()[0]
-        cur.execute(
-            "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?, ?)",
-            (note_id, tag_id),
-        )
-    conn.commit()
-    conn.close()
-
-
 # ------------------------------------------------------------- settings ---
 
 def get_setting(key, default=""):
@@ -343,12 +254,12 @@ def set_setting(key, value):
 # ------------------------------------------------------------ seed data ---
 
 def seed_if_empty():
-    """Fill a fresh database with sample folders, tags, and notes so the
-    app looks alive on first launch. Does nothing once notes exist."""
+    """Fill a fresh database with sample folders and notes so the app
+    looks alive on first launch. Does nothing once notes exist."""
     if count_notes("1=1") > 0:
         return
     folder_ids = {}
-    for name in ["Coding", "School", "Ideas", "Work", "Personal"]:
+    for name in ["School", "Ideas", "Personal"]:
         folder_ids[name] = create_folder(name)
 
     samples = [
@@ -356,32 +267,27 @@ def seed_if_empty():
          "Basic syntax, data structures, functions, classes, and useful "
          "libraries for daily use.\n\n- Lists: [1, 2, 3]\n- Dicts: {'a': 1}\n"
          "- Loops: for x in items:",
-         "Coding", ["python", "cheatsheet"], True, False),
+         "School", True, False),
         ("Project Ideas",
          "1. Studora (education app)\n2. Road travel (transport booking)\n"
          "3. Notes app with a really nice dark UI",
-         "Ideas", ["ideas", "projects"], True, False),
-        ("School Notes",
-         "Key concepts from today's lecture:\n- Database normalization\n"
-         "- SQL joins and relationships\n- Primary vs foreign keys",
-         "School", ["school", "database"], False, False),
-        ("Work Plan",
-         "Q4 goals:\n- Finish Studora MVP\n- Improve app performance\n"
-         "- Write documentation",
-         "Work", ["work", "goals"], False, False),
-        ("Personal Journal",
-         "Life's been moving fast. Grateful for the progress, "
-         "even if it feels slow sometimes.",
-         "Personal", ["personal", "journal"], False, True),
+         "Ideas", True, False),
+        ("Database Normalization",
+         "Key concepts from today's lecture:\n- First normal form: atomic values\n"
+         "- Second normal form: no partial dependencies\n- Third normal form: no transitive dependencies",
+         "School", False, True),
+        ("Q4 Goals",
+         "- Finish Studora MVP\n- Improve app performance\n"
+         "- Write documentation\n- Ship the notes app",
+         "Personal", False, False),
         ("Welcome to Notes",
-         "This is your new notes app.\n\n- Click New Note to start writing\n"
-         "- Organize with folders and tags\n- Pin what matters with the star menu",
-         None, ["important"], False, False),
+         "This is your new notes app.\n\n- Click a note on the left to open it\n"
+         "- Press New Note to start writing\n- Organize with folders\n- Pin what matters",
+         None, False, False),
     ]
-    for title, body, folder, tags, pinned, favorite in samples:
+    for title, body, folder, pinned, favorite in samples:
         note_id = create_note(title, body,
                               folder_ids.get(folder) if folder else None)
-        set_note_tags(note_id, tags)
         if pinned:
             set_flag(note_id, "pinned", True)
         if favorite:

@@ -27,3 +27,26 @@ FONTS = {
     "small": ("Segoe UI", 9),             # secondary text
     "tiny": ("Segoe UI", 8),              # timestamps
 }
+
+# Small text symbols for action buttons only (sidebar stays text-only).
+# These are plain Unicode glyphs, not emoji, so they render everywhere.
+ICONS = {
+    "new": "+",
+    "pin": "◉",
+    "favorite": "★",
+    "archive": "▦",
+    "restore": "↩",
+    "delete": "✕",
+    "export": "↓",
+    "sort": "⇅",
+}
+
+# Note accent colors. "default" means no accent (no colored edge).
+NOTE_COLORS = {
+    "blue": "#60a5fa",
+    "green": "#34d399",
+    "amber": "#fbbf24",
+    "purple": "#a78bfa",
+    "rose": "#fb7185",
+}
+COLOR_ORDER = ["default", "blue", "green", "amber", "purple", "rose"]

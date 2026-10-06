@@ -154,8 +154,47 @@ def input_dialog(parent, title, prompt, initial=""):
     return result["value"]
 
 
+def choice_dialog(parent, title, prompt, options):
+    """Pick one option from a list. options is a list of
+    (key, label, hint) tuples. Returns the chosen key, or None if
+    the dialog was closed."""
+    dlg = tk.Toplevel(parent)
+    dlg.title(title)
+    dlg.configure(bg=COLORS["card"])
+    dlg.resizable(False, False)
+    dlg.grab_set()
+    dlg.update_idletasks()
+    x = parent.winfo_rootx() + parent.winfo_width() // 2 - 170
+    y = parent.winfo_rooty() + parent.winfo_height() // 2 - 130
+    dlg.geometry(f"340x260+{x}+{y}")
+
+    tk.Label(dlg, text=prompt, bg=COLORS["card"], fg=COLORS["muted"],
+             font=FONTS["small"]).pack(anchor="w", padx=20, pady=(18, 10))
+
+    result = {"key": None}
+
+    def choose(key):
+        result["key"] = key
+        dlg.destroy()
+
+    for key, label, hint in options:
+        row = tk.Frame(dlg, bg=COLORS["card"], cursor="hand2",
+                       highlightbackground=COLORS["border"],
+                       highlightthickness=1)
+        row.pack(fill="x", padx=20, pady=(0, 8))
+        tk.Label(row, text=label, bg=COLORS["card"], fg=COLORS["text"],
+                 font=FONTS["body"]).pack(side="left", padx=12, pady=9)
+        tk.Label(row, text=hint, bg=COLORS["card"], fg=COLORS["faint"],
+                 font=FONTS["small"]).pack(side="right", padx=12)
+        for w in (row, *row.winfo_children()):
+            w.bind("<Button-1>", lambda _e, k=key: choose(k))
+
+    dlg.bind("<Escape>", lambda _e: dlg.destroy())
+    parent.wait_window(dlg)
+    return result["key"]
+
+
 def scrollable(parent):
-    """A vertically scrollable area. Add widgets to the returned frame."""
     canvas = tk.Canvas(parent, bg=COLORS["bg"], highlightthickness=0)
     scrollbar = tk.Scrollbar(parent, orient="vertical", command=canvas.yview)
     inner = tk.Frame(canvas, bg=COLORS["bg"])

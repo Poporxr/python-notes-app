@@ -12,6 +12,7 @@ sample data).
 
 import os
 import sqlite3
+from datetime import datetime, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "notes.db")
 
@@ -43,6 +44,7 @@ def init_db():
                pinned INTEGER DEFAULT 0,
                favorite INTEGER DEFAULT 0,
                archived INTEGER DEFAULT 0,
+               color TEXT DEFAULT 'default',
                created TEXT DEFAULT (datetime('now')),
                updated TEXT DEFAULT (datetime('now')))"""
     )
@@ -54,19 +56,30 @@ def init_db():
     # Tags were removed from the app; clean up after old installs.
     cur.execute("DROP TABLE IF EXISTS note_tags")
     cur.execute("DROP TABLE IF EXISTS tags")
+    # Older installs lack the color column; add it if missing.
+    cols = [r[1] for r in cur.execute("PRAGMA table_info(notes)")]
+    if "color" not in cols:
+        cur.execute("ALTER TABLE notes ADD COLUMN color TEXT DEFAULT 'default'")
     conn.commit()
     conn.close()
 
 
 # ---------------------------------------------------------------- notes ---
 
-def create_note(title="Untitled", body="", folder_id=None):
-    """Insert a note and return its new id."""
+def create_note(title="Untitled", body="", folder_id=None,
+                created=None, updated=None, pinned=False, favorite=False):
+    """Insert a note and return its new id.
+
+    created/updated/pinned/favorite are only passed by the seed data so
+    the sample notes look real; normal notes just stamp the current time."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO notes (title, body, folder_id) VALUES (?, ?, ?)",
-        (title, body, folder_id),
+        "INSERT INTO notes (title, body, folder_id, created, updated,"
+        " pinned, favorite) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (title, body, folder_id, created or now, updated or created or now,
+         1 if pinned else 0, 1 if favorite else 0),
     )
     note_id = cur.lastrowid
     conn.commit()
@@ -84,7 +97,7 @@ def get_note(note_id):
     return dict(row) if row else None
 
 
-def update_note(note_id, title=None, body=None, folder_id=None):
+def update_note(note_id, title=None, body=None, folder_id=None, color=None):
     """Update the given fields and stamp the note as edited."""
     conn = get_connection()
     cur = conn.cursor()
@@ -98,6 +111,9 @@ def update_note(note_id, title=None, body=None, folder_id=None):
     if folder_id is not None:
         parts.append("folder_id = ?")
         values.append(folder_id)
+    if color is not None:
+        parts.append("color = ?")
+        values.append(color)
     parts.append("updated = datetime('now')")
     values.append(note_id)
     cur.execute(f"UPDATE notes SET {', '.join(parts)} WHERE id = ?", values)
@@ -262,33 +278,38 @@ def seed_if_empty():
     for name in ["School", "Ideas", "Personal"]:
         folder_ids[name] = create_folder(name)
 
+    def ago(days=0, hours=0):
+        """A timestamp string for some time in the past, so the sample
+        notes don't all claim to be brand new."""
+        dt = datetime.now() - timedelta(days=days, hours=hours)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+
     samples = [
+        # title, body, folder, pinned, favorite, created, updated
+        ("Welcome to Notes",
+         "This is your new notes app.\n\n- Click a note on the left to open it\n"
+         "- Press New Note to start writing\n- Organize with folders\n- Pin what matters",
+         None, False, False, ago(days=9), ago(days=9)),
+        ("Q4 Goals",
+         "- [ ] Finish Studora MVP\n- [ ] Improve app performance\n"
+         "- [x] Write documentation\n- [ ] Ship the notes app",
+         "Personal", False, False, ago(days=6), ago(days=4)),
+        ("Database Normalization",
+         "Key concepts from today's lecture:\n- First normal form: atomic values\n"
+         "- Second normal form: no partial dependencies\n- Third normal form: no transitive dependencies",
+         "School", False, True, ago(days=3), ago(days=3)),
+        ("Project Ideas",
+         "1. Studora (education app)\n2. Road travel (transport booking)\n"
+         "3. Notes app with a really nice dark UI",
+         "Ideas", True, False, ago(days=1), ago(hours=5)),
         ("Python Cheatsheet",
          "Basic syntax, data structures, functions, classes, and useful "
          "libraries for daily use.\n\n- Lists: [1, 2, 3]\n- Dicts: {'a': 1}\n"
          "- Loops: for x in items:",
-         "School", True, False),
-        ("Project Ideas",
-         "1. Studora (education app)\n2. Road travel (transport booking)\n"
-         "3. Notes app with a really nice dark UI",
-         "Ideas", True, False),
-        ("Database Normalization",
-         "Key concepts from today's lecture:\n- First normal form: atomic values\n"
-         "- Second normal form: no partial dependencies\n- Third normal form: no transitive dependencies",
-         "School", False, True),
-        ("Q4 Goals",
-         "- Finish Studora MVP\n- Improve app performance\n"
-         "- Write documentation\n- Ship the notes app",
-         "Personal", False, False),
-        ("Welcome to Notes",
-         "This is your new notes app.\n\n- Click a note on the left to open it\n"
-         "- Press New Note to start writing\n- Organize with folders\n- Pin what matters",
-         None, False, False),
+         "School", True, False, ago(hours=2), ago(hours=2)),
     ]
-    for title, body, folder, pinned, favorite in samples:
-        note_id = create_note(title, body,
-                              folder_ids.get(folder) if folder else None)
-        if pinned:
-            set_flag(note_id, "pinned", True)
-        if favorite:
-            set_flag(note_id, "favorite", True)
+    for title, body, folder, pinned, favorite, created, updated in samples:
+        create_note(title, body,
+                    folder_ids.get(folder) if folder else None,
+                    created=created, updated=updated,
+                    pinned=pinned, favorite=favorite)

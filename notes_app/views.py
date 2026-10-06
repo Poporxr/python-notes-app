@@ -3,14 +3,64 @@ left, the editor on the right. One reusable layout, used by every
 list screen (All Notes, Pinned, Favorites, Archive, folders, search).
 """
 
+import re
 import tkinter as tk
 from datetime import datetime
+from tkinter import filedialog
 
 from . import database as db
-from .theme import COLORS, FONTS
+from .theme import COLORS, FONTS, ICONS, NOTE_COLORS, COLOR_ORDER
 from .widgets import (clear, empty_state, primary_button, text_button,
-                      confirm_dialog, input_dialog, scrollable,
-                      relative_time)
+                      confirm_dialog, input_dialog, choice_dialog,
+                      scrollable, relative_time)
+
+
+# ------------------------------------------------------ note templates ---
+
+def template_blank():
+    return "Untitled", ""
+
+
+def template_meeting():
+    return ("Meeting Notes",
+            "## Attendees\n\n## Agenda\n1. \n\n## Action items\n- [ ] \n")
+
+
+def template_todo():
+    return "Todo List", "- [ ] \n- [ ] \n- [ ] \n"
+
+
+def template_journal():
+    today = datetime.now().strftime("%b %d, %Y")
+    return today, f"# {today}\n\nGrateful for:\n- \n\n"
+
+
+# key -> function returning (title, body)
+TEMPLATES = {
+    "blank": template_blank,
+    "meeting": template_meeting,
+    "todo": template_todo,
+    "journal": template_journal,
+}
+
+TYPE_OPTIONS = [
+    ("blank", "Blank note", "Start from scratch"),
+    ("meeting", "Meeting notes", "Attendees, agenda, actions"),
+    ("todo", "Todo list", "A checklist to work through"),
+    ("journal", "Journal entry", "Dated reflection"),
+]
+
+
+def add_color_strip(row, note, on_click):
+    """Thin colored edge on the left of a list row, for notes that
+    have a color set. Skipped for the default (no color)."""
+    color = NOTE_COLORS.get(note.get("color") or "default")
+    if not color:
+        return
+    strip = tk.Frame(row, bg=color, width=3)
+    strip.pack(side="left", fill="y")
+    strip.bind("<Button-1>", lambda _e: on_click())
+    row.color_strip = strip  # highlight() must not recolor this
 
 
 # ------------------------------------------------------- note list row ---
@@ -45,26 +95,34 @@ class NoteList(tk.Frame):
                        highlightthickness=1, cursor="hand2")
         row.pack(fill="x", pady=(0, 8))
 
+        nid = note["id"]
+        select = lambda: self.select(nid)
+        add_color_strip(row, note, select)
+
+        text_col = tk.Frame(row, bg=COLORS["card"])
+        text_col.pack(side="left", fill="both", expand=True)
+
         title = note["title"] or "Untitled"
         if note["pinned"]:
             title += "  ·  PINNED"
-        tk.Label(row, text=title, bg=COLORS["card"], fg=COLORS["text"],
+        tk.Label(text_col, text=title, bg=COLORS["card"], fg=COLORS["text"],
                  font=FONTS["title"], anchor="w").pack(
                      fill="x", padx=12, pady=(10, 0))
         snip = snippet_of(note)
         if snip:
-            tk.Label(row, text=snip, bg=COLORS["card"], fg=COLORS["muted"],
+            tk.Label(text_col, text=snip, bg=COLORS["card"], fg=COLORS["muted"],
                      font=FONTS["small"], anchor="w").pack(
                          fill="x", padx=12)
-        tk.Label(row, text=relative_time(note["updated"]),
+        tk.Label(text_col, text=relative_time(note["updated"]),
                  bg=COLORS["card"], fg=COLORS["faint"],
                  font=FONTS["tiny"], anchor="w").pack(
                      fill="x", padx=12, pady=(2, 10))
 
-        nid = note["id"]
-        row.bind("<Button-1>", lambda _e: self.select(nid))
+        row.bind("<Button-1>", lambda _e: select())
         for child in row.winfo_children():
-            child.bind("<Button-1>", lambda _e: self.select(nid))
+            child.bind("<Button-1>", lambda _e: select())
+            for grand in child.winfo_children():
+                grand.bind("<Button-1>", lambda _e: select())
         self.rows[nid] = row
 
     def select(self, note_id):
@@ -76,11 +134,19 @@ class NoteList(tk.Frame):
         for nid, row in self.rows.items():
             bg = COLORS["selected"] if nid == note_id else COLORS["card"]
             row.configure(bg=bg)
+            strip = getattr(row, "color_strip", None)
             for child in row.winfo_children():
+                if child is strip:
+                    continue  # the accent edge keeps its color
                 try:
                     child.configure(bg=bg)
                 except tk.TclError:
                     pass
+                for grand in child.winfo_children():
+                    try:
+                        grand.configure(bg=bg)
+                    except tk.TclError:
+                        pass
 
 
 # ---------------------------------------------------------- editor panel ---
@@ -132,11 +198,16 @@ class EditorPanel(tk.Frame):
         menu.pack(side="left")
         self.folder_var.trace_add("write", lambda *_: self.schedule())
 
+        # Color dots: pick an accent color for this note --------------------
+        self.color_frame = tk.Frame(bar, bg=COLORS["bg"])
+        self.color_frame.pack(side="left", padx=(10, 0))
+        self.refresh_color_dots()
+
         self.saved_lbl = tk.Label(bar, text="", bg=COLORS["bg"],
                                   fg=COLORS["green"], font=FONTS["small"])
         self.saved_lbl.pack(side="right")
 
-        # Pin / Favorite / Archive toggles as plain text buttons ----------
+        # Pin / Favorite / Archive toggles as small icon + text buttons ----
         self.pin_btn = text_button(
             bar, "", lambda: self.toggle("pinned"), COLORS["amber"])
         self.pin_btn.pack(side="right", padx=6)
@@ -144,11 +215,11 @@ class EditorPanel(tk.Frame):
             bar, "", lambda: self.toggle("favorite"), COLORS["amber"])
         self.fav_btn.pack(side="right", padx=6)
         if note["archived"]:
-            text_button(bar, "Restore",
+            text_button(bar, f"{ICONS['restore']} Restore",
                         self.restore, COLORS["green"]).pack(side="right",
                                                            padx=6)
         else:
-            self.arc_btn = text_button(bar, "Archive",
+            self.arc_btn = text_button(bar, f"{ICONS['archive']} Archive",
                                        lambda: self.toggle("archived"))
             self.arc_btn.pack(side="right", padx=6)
         self.refresh_toggles()
@@ -175,9 +246,17 @@ class EditorPanel(tk.Frame):
                             wrap="word", padx=14, pady=14, undo=True)
         self.body.pack(fill="both", expand=True)
         self.body.insert("1.0", note["body"] or "")
-        self.body.bind("<KeyRelease>", lambda _e: self.schedule())
+        self.body.bind("<KeyRelease>", lambda _e: self.on_type())
+        self.body.bind("<Return>", self.on_return)
+        self.body.bind("<Button-1>", self.on_click_box)
+        # Checklist rendering: checked items look done, boxes stand out.
+        self.body.tag_configure("box", background=COLORS["accent_soft"],
+                                foreground=COLORS["text"])
+        self.body.tag_configure("done", foreground=COLORS["faint"],
+                                overstrike=True)
+        self.render_checklists()
 
-        # Bottom: word count, timestamps, delete ---------------------------
+        # Bottom: word count, timestamps, export, delete --------------------
         bottom = tk.Frame(self, bg=COLORS["bg"])
         bottom.pack(fill="x", pady=(8, 0))
         self.count_lbl = tk.Label(bottom, text="", bg=COLORS["bg"],
@@ -189,11 +268,14 @@ class EditorPanel(tk.Frame):
                  font=FONTS["tiny"]).pack(side="left", padx=(12, 0))
 
         if note["archived"]:
-            text_button(bottom, "Delete forever", self.delete_forever,
+            text_button(bottom, f"{ICONS['delete']} Delete forever",
+                        self.delete_forever,
                         COLORS["red"]).pack(side="right")
         else:
-            text_button(bottom, "Delete", self.delete,
+            text_button(bottom, f"{ICONS['delete']} Delete", self.delete,
                         COLORS["red"]).pack(side="right")
+        text_button(bottom, f"{ICONS['export']} Export",
+                    self.export_txt).pack(side="right", padx=8)
 
         self.update_count()
         self.body.focus_set()
@@ -211,14 +293,22 @@ class EditorPanel(tk.Frame):
             self._build_empty()
 
     def new(self):
-        """Create a note and open it."""
+        """Ask what kind of note, then create it from that template."""
+        choice = choice_dialog(self, "New note", "What kind of note?",
+                               TYPE_OPTIONS)
+        if choice is None:
+            return  # dialog closed; don't create anything
         self.save_now()
-        self.note_id = db.create_note("Untitled")
+        title, body = TEMPLATES[choice]()
+        self.note_id = db.create_note(title, body)
         self.note = db.get_note(self.note_id)
         self._build_editor()
         self.on_change()
-        self.title_entry.focus_set()
-        self.title_entry.select_range(0, "end")
+        if choice == "blank":
+            self.title_entry.focus_set()
+            self.title_entry.select_range(0, "end")
+        else:
+            self.body.focus_set()
 
     def toggle(self, field):
         new_value = not self.note[field]
@@ -230,9 +320,34 @@ class EditorPanel(tk.Frame):
 
     def refresh_toggles(self):
         n = self.note
-        self.pin_btn.configure(text="Unpin" if n["pinned"] else "Pin")
+        self.pin_btn.configure(
+            text=f"{ICONS['pin']} {'Unpin' if n['pinned'] else 'Pin'}")
         self.fav_btn.configure(
-            text="Unfavorite" if n["favorite"] else "Favorite")
+            text=f"{ICONS['favorite']} "
+                 f"{'Unfavorite' if n['favorite'] else 'Favorite'}")
+
+    def set_color(self, color):
+        """Pick an accent color; it shows as an edge on the list row."""
+        db.update_note(self.note_id, color=color)
+        self.note["color"] = color
+        self.refresh_color_dots()
+        self.mark_saved()
+        self.on_change()
+
+    def refresh_color_dots(self):
+        """Small clickable dots; the current color gets a bright ring."""
+        clear(self.color_frame)
+        current = self.note.get("color") or "default"
+        for name in COLOR_ORDER:
+            dot = tk.Label(self.color_frame, text="  ",
+                           bg=NOTE_COLORS.get(name, COLORS["bg"]),
+                           cursor="hand2",
+                           highlightbackground=COLORS["text"]
+                           if name == current else COLORS["border"],
+                           highlightthickness=2
+                           if name == current else 1)
+            dot.pack(side="left", padx=2)
+            dot.bind("<Button-1>", lambda _e, c=name: self.set_color(c))
 
     def restore(self):
         db.set_flag(self.note_id, "archived", False)
@@ -261,6 +376,105 @@ class EditorPanel(tk.Frame):
             self.after_cancel(self._timer)
         self._timer = self.after(self.app.autosave_ms, self.save_now)
         self.update_count()
+
+    def on_type(self):
+        """Ran after every keystroke: refresh checklist styling, autosave."""
+        self.render_checklists()
+        self.schedule()
+
+    # -- auto-lists --------------------------------------------------------
+
+    CHECK_RE = re.compile(r"^(\s*)(- )?\[([ x])\]\s?(.*)$")
+    NUMBER_RE = re.compile(r"^(\s*)(\d+)\.\s?(.*)$")
+    BULLET_RE = re.compile(r"^(\s*)-\s?(.*)$")
+
+    def on_return(self, event):
+        """Enter continues the current list, or ends it when the item
+        is empty (only the marker was typed)."""
+        idx = self.body.index("insert")
+        line_no = int(idx.split(".")[0])
+        if idx != self.body.index(f"{line_no}.end"):
+            return  # mid-line Enter: let tkinter do the normal thing
+        line = self.body.get(f"{line_no}.0", f"{line_no}.end")
+
+        m = self.CHECK_RE.match(line)
+        if m:
+            indent, dash, rest = m.group(1), m.group(2) or "", m.group(4)
+            return self._continue_or_end(line_no, rest, f"{indent}{dash}[ ] ")
+
+        m = self.NUMBER_RE.match(line)
+        if m:
+            indent, num, rest = m.group(1), int(m.group(2)), m.group(3)
+            return self._continue_or_end(line_no, rest,
+                                         f"{indent}{num + 1}. ")
+
+        m = self.BULLET_RE.match(line)
+        if m:
+            indent, rest = m.group(1), m.group(2)
+            return self._continue_or_end(line_no, rest, f"{indent}- ")
+
+    def _continue_or_end(self, line_no, rest, marker):
+        if not rest.strip():
+            # Empty item: remove the marker, the list is done.
+            self.body.delete(f"{line_no}.0", f"{line_no}.end")
+        else:
+            self.body.insert("insert", f"\n{marker}")
+        self.render_checklists()
+        self.schedule()
+        return "break"
+
+    # -- checklists ----------------------------------------------------------
+
+    def render_checklists(self):
+        """Style checklist lines: the [ ]/[x] box stands out, and checked
+        items look done (dimmed + struck through). Plain text in the db."""
+        if not hasattr(self, "body"):
+            return
+        for tag in ("box", "done"):
+            self.body.tag_remove(tag, "1.0", "end")
+        for i, line in enumerate(
+                self.body.get("1.0", "end-1c").split("\n"), start=1):
+            m = self.CHECK_RE.match(line)
+            if not m:
+                continue
+            # Highlight just the "[ ]" / "[x]" part.
+            self.body.tag_add("box",
+                              f"{i}.{m.start(3) - 1}", f"{i}.{m.end(3) + 1}")
+            if m.group(3) == "x":
+                self.body.tag_add("done", f"{i}.0", f"{i}.end")
+
+    def on_click_box(self, event):
+        """Clicking a [ ] or [x] flips it. Anything else: normal click."""
+        pos = self.body.index(f"@{event.x},{event.y}")
+        line_no, col = pos.split(".")
+        line = self.body.get(f"{line_no}.0", f"{line_no}.end")
+        m = self.CHECK_RE.match(line)
+        if not m or int(col) > m.end(3):
+            return  # not on the box; let the click behave normally
+        at = f"{line_no}.{m.start(3)}"
+        self.body.delete(at, f"{at}+1c")
+        self.body.insert(at, "x" if m.group(3) == " " else " ")
+        self.render_checklists()
+        self.schedule()
+        return "break"
+
+    # -- export ---------------------------------------------------------------
+
+    def export_txt(self):
+        """Save this note as a .txt file wherever the user chooses."""
+        self.save_now()  # export what's on screen, not stale db content
+        title = (self.note["title"] or "Untitled").strip()
+        safe = "".join(c for c in title if c.isalnum() or c in " -_")[:40]
+        path = filedialog.asksaveasfilename(
+            title="Export note",
+            initialfile=f"{safe or 'note'}.txt",
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt")])
+        if not path:
+            return
+        body = self.body.get("1.0", "end-1c")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f"{title}\n{self.note['updated'][:16]}\n\n{body}")
 
     def save_now(self):
         if not self.note_id or not self.note:
@@ -311,7 +525,11 @@ class MasterDetail(tk.Frame):
                  font=FONTS["display"]).pack(side="left")
         tk.Label(header, text=subtitle, bg=COLORS["bg"], fg=COLORS["muted"],
                  font=FONTS["small"]).pack(side="left", padx=(12, 0))
-        primary_button(header, "New Note", self.new_note).pack(side="right")
+        primary_button(header, f"{ICONS['new']} New Note",
+                       self.new_note).pack(side="right")
+        self.sort_btn = text_button(header, "", self.cycle_sort)
+        self.sort_btn.pack(side="right", padx=(0, 12))
+        self.refresh_sort_label()
 
         panes = tk.PanedWindow(self, bg=COLORS["bg"], sashwidth=6,
                                sashrelief="flat", orient="horizontal")
@@ -333,7 +551,7 @@ class MasterDetail(tk.Frame):
 
     def refresh(self, select_id=None):
         """Reload the list; keep the current selection if it's still there."""
-        notes = self.fetch_notes()
+        notes = self.sorted_notes(self.fetch_notes())
         current = select_id or self.editor.note_id
         self.note_list.show(notes)
         if not notes:
@@ -347,6 +565,33 @@ class MasterDetail(tk.Frame):
         elif notes and self.editor.note_id is None:
             # Nothing open yet: show the first note.
             self.note_list.select(notes[0]["id"])
+
+    SORT_LABELS = {"newest": "Newest", "oldest": "Oldest", "title": "A–Z"}
+
+    def cycle_sort(self):
+        """Tap to cycle the sort order. Kept on the app so it survives
+        screen switches (session only, not saved)."""
+        order = ["newest", "oldest", "title"]
+        mode = self.app.sort_mode
+        self.app.sort_mode = order[(order.index(mode) + 1) % len(order)]
+        self.refresh_sort_label()
+        self.refresh()
+
+    def refresh_sort_label(self):
+        self.sort_btn.configure(
+            text=f"{ICONS['sort']} {self.SORT_LABELS[self.app.sort_mode]}")
+
+    def sorted_notes(self, notes):
+        """Apply the session sort. Pinned notes always float to the top."""
+        notes = list(notes)
+        if self.app.sort_mode == "title":
+            notes.sort(key=lambda n: (n["title"] or "").lower())
+        elif self.app.sort_mode == "oldest":
+            notes.sort(key=lambda n: n["updated"])
+        else:
+            notes.sort(key=lambda n: n["updated"], reverse=True)
+        notes.sort(key=lambda n: not n["pinned"])  # stable: pinned first
+        return notes
 
     def open_note(self, note_id):
         self.editor.load(note_id)
@@ -413,7 +658,7 @@ def build_home(content, app):
     header.pack(fill="x", padx=24, pady=(26, 8))
     tk.Label(header, text="Recent Notes", bg=COLORS["bg"], fg=COLORS["text"],
              font=FONTS["heading"]).pack(side="left")
-    primary_button(header, "New Note",
+    primary_button(header, f"{ICONS['new']} New Note",
                    lambda: app.show("notes", mode="all", fresh=True)).pack(
                        side="right")
 
@@ -423,25 +668,28 @@ def build_home(content, app):
                     "Click New Note to write your first one.")
         return
 
+    def open_note(i):
+        app.show("notes", mode="all", select_id=i)
+
     for note in notes:
         row = tk.Frame(scroll, bg=COLORS["card"],
                        highlightbackground=COLORS["border"],
                        highlightthickness=1, cursor="hand2")
         row.pack(fill="x", padx=24, pady=(0, 8))
-        tk.Label(row, text=note["title"] or "Untitled", bg=COLORS["card"],
+        nid = note["id"]
+        add_color_strip(row, note, lambda i=nid: open_note(i))
+        text_col = tk.Frame(row, bg=COLORS["card"])
+        text_col.pack(side="left", fill="both", expand=True)
+        tk.Label(text_col, text=note["title"] or "Untitled",
+                 bg=COLORS["card"],
                  fg=COLORS["text"], font=FONTS["title"],
                  anchor="w").pack(fill="x", padx=14, pady=(10, 0))
-        tk.Label(row, text=relative_time(note["updated"]),
+        tk.Label(text_col, text=relative_time(note["updated"]),
                  bg=COLORS["card"], fg=COLORS["faint"],
                  font=FONTS["tiny"], anchor="w").pack(
                      fill="x", padx=14, pady=(2, 10))
-        nid = note["id"]
-        row.bind("<Button-1>",
-                 lambda _e, i=nid: app.show("notes", mode="all", select_id=i))
-        for child in row.winfo_children():
-            child.bind("<Button-1>",
-                       lambda _e, i=nid: app.show("notes", mode="all",
-                                                 select_id=i))
+        for w in (row, text_col, *text_col.winfo_children()):
+            w.bind("<Button-1>", lambda _e, i=nid: open_note(i))
 
 
 # --------------------------------------------------------------- folders ---
@@ -451,7 +699,7 @@ def build_folders(content, app):
     header.pack(fill="x", padx=24, pady=(20, 12))
     tk.Label(header, text="Folders", bg=COLORS["bg"], fg=COLORS["text"],
              font=FONTS["display"]).pack(side="left")
-    primary_button(header, "New Folder",
+    primary_button(header, f"{ICONS['new']} New Folder",
                    lambda: new_folder(app)).pack(side="right")
 
     folders = db.list_folders()

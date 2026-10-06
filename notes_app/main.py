@@ -25,6 +25,7 @@ class NotesApp(tk.Tk):
             self.autosave_ms = 1500
         self.current = "home"
         self.current_args = {}
+        self.sort_mode = "newest"  # session-only list ordering
 
         # Sidebar -----------------------------------------------------------
         self.sidebar = tk.Frame(self, bg=COLORS["sidebar"], width=220)

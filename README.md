@@ -20,6 +20,13 @@ feels alive right away.
 - **Notes are lists** — click a note on the left, it opens on the right
 - **Editor** — big title up top, body below, folder picker, pin/favorite/archive
   buttons, autosave, word count
+- **Note types** — New Note asks what kind: Blank, Meeting notes, Todo list,
+  or Journal entry, each with a starter template
+- **Checklists** — type `- [ ]` for a task, click the box to check it off
+- **Auto-lists** — Enter continues numbered and bulleted lists for you
+- **Sort** — newest, oldest, or A–Z on any note list
+- **Colors** — give a note an accent color, shown as an edge on its row
+- **Export** — save any note as a `.txt` file
 - **Folders** — create, rename, delete; notes become unfiled when a folder is deleted
 - **Search** — the top bar searches titles and content
 - **Shortcuts** — `Ctrl+N` new note, `Ctrl+F` search
